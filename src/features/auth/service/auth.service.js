@@ -1,17 +1,18 @@
 import * as authRepository from "../repository/auth.repository.js";
 import bcrypt from "bcrypt";
-import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import * as userRepository from "../../user/repository/user.repository.js";
 import { sendEmail } from "../../../common/email/nodemailer.js";
 import { toMs } from "../../../common/Utils/time.js";
 import { otpExpired, otpInvalid, InvalidEmailOrPass } from "../errors.js";
+import crypto from "node:crypto";
 import {
   userNotExist,
   userVerified,
   userAlreadyExists,
   userNotVerified,
 } from "../../user/errors.js";
+import { generateOtpCode } from "../../../common/Utils/otp.js";
 
 //1- register
 export async function register(userData) {
@@ -24,9 +25,9 @@ export async function register(userData) {
   //4- save user to database [verify email false]
   const createdUser = await authRepository.createUser(userData);
   //5- send activation OTP     to user's email
-  const otp = crypto.randomInt(100000, 999999).toString();
+  const otpCode = generateOtpCode();
   await authRepository.createOTP({
-    otpCode: otp,
+    otpCode: otpCode,
     email: createdUser.email,
     expireAt: new Date(Date.now() + toMs(5, "minutes")),
   });
@@ -89,4 +90,26 @@ export async function login(email, password) {
   );
   //7. return user
   return token;
+}
+
+//4- reSend OTP
+
+export async function sendOtp(email) {
+  // 1- user is exist
+  const user = await authRepository.checkUserEmailExists(email);
+  // 1.1 - throw error if not
+  if (!user) throw userNotExist;
+  //1.2 check otp if exist delete else send
+  await authRepository.deleteOtpByEmail(email);
+  //2 generate otp and send into DB
+  const otpCode = generateOtpCode();
+
+  await authRepository.createOTP({
+    otpCode: otpCode,
+    email: email,
+    expireAt: Date.now() + toMs(3, 'minutes'),
+  });
+
+  //3 - send otp email
+  await sendEmail(email, "new OTP", `<p>your OTP is: ${otpCode} </p>`);
 }

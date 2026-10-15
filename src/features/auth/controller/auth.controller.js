@@ -34,7 +34,7 @@ export async function login(req, res, next) {
   try {
     const { email, password } = req.body;
     const token = await authService.login(email, password);
-        res.cookie("access_token", token, {
+    res.cookie("access_token", token, {
       httpOnly: true, // secure: true,  // 100% secure
       maxAge: toMs(1, "hours"), // session expires after 1 hour
     });
@@ -42,8 +42,20 @@ export async function login(req, res, next) {
       success: true,
       message: "Login successful",
     });
-
   } catch (error) {
     next(error);
+  }
+}
+
+export async function sendOtp(req, res, next) {
+  try {
+    const { email } = req.body;
+    await authService.sendOtp(email);
+    res.status(200).json({
+      success: true,
+      message: "OTP sent successfully, Check Your email",
+    });
+  } catch (err) {
+    next(err);
   }
 }

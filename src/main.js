@@ -23,23 +23,16 @@ app.use("/user", userRouter);
 app.use("/auth", authRouter);
 app.use("/message", messageRouter);
 
-// OTP.createIndexes().then(() => {
-//   console.log("Indexes created successfully");
-// }).catch((err) => {
-//   console.error("Error creating indexes:", err);
-// });
-
-// OTP.create({
-//   code: "123456",
-//   email: "VWZ2j@example.com",
-//   expireAt: Date.now() + 30 * 1000,  // Set expiration time to 30 seconds from now
-// })
 //Erorr handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).send("Something went wrong!");
+  res.status(500).send({
+    success: false,
+    message: err.message,
+    stack: err.stack,
+  });
 });
 
 app.listen(process.env.PORT, () => {
   console.log(`Server is running on port ${process.env.PORT}`);
-}); 
+});

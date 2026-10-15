@@ -9,6 +9,15 @@ Content-Type: application/json
   "password": "123456"
 }
 
+### verify OTP
+# PATCH http://localhost:3000/auth/verify-account
+# Content-Type: application/json
+
+# {
+#   "email": "metooqasim@gmail.com",
+#   "otpCode": "858593"
+# }
+
 ### Login
 # POST http://localhost:3000/auth/login
 # Content-Type: application/json

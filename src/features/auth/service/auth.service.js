@@ -6,6 +6,7 @@ import { sendEmail } from "../../../common/email/nodemailer.js";
 import { toMs } from "../../../common/Utils/time.js";
 import { otpExpired, otpInvalid, InvalidEmailOrPass } from "../errors.js";
 import crypto from "node:crypto";
+import { otpEmailTemplate } from "../../../common/email/otpTemplate.js";
 import {
   userNotExist,
   userVerified,
@@ -34,8 +35,8 @@ export async function register(userData) {
   //6- return user
   await sendEmail(
     createdUser.email,
-    "verify your account",
-    `<p>Your verification otpCode is: ${otp}</p>`,
+    "Verify your account",
+    otpEmailTemplate({ name: createdUser.name, otpCode, expiresInMinutes: 5 }),
   );
   return createdUser;
 }
@@ -95,21 +96,28 @@ export async function login(email, password) {
 //4- reSend OTP
 
 export async function sendOtp(email) {
-  // 1- user is exist
+  // 1- check user exists
   const user = await authRepository.checkUserEmailExists(email);
-  // 1.1 - throw error if not
   if (!user) throw userNotExist;
-  //1.2 check otp if exist delete else send
-  await authRepository.deleteOtpByEmail(email);
-  //2 generate otp and send into DB
-  const otpCode = generateOtpCode();
 
+  // 2- if already verified, stop here (no OTP, no email)
+  if (user.isVerified === true) throw userVerified;
+
+  // 3- delete old otp if exists
+  await authRepository.deleteOtpByEmail(email);
+
+  // 4- generate and save new otp
+  const otpCode = generateOtpCode();
   await authRepository.createOTP({
-    otpCode: otpCode,
-    email: email,
-    expireAt: Date.now() + toMs(3, 'minutes'),
+    otpCode,
+    email,
+    expireAt: new Date(Date.now() + toMs(3, "minutes")),
   });
 
-  //3 - send otp email
-  await sendEmail(email, "new OTP", `<p>your OTP is: ${otpCode} </p>`);
+  // 5- send email
+  await sendEmail(
+    email,
+    "New verification code",
+    otpEmailTemplate({ name: user.name, otpCode, expiresInMinutes: 3 }),
+  );
 }

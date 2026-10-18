@@ -59,3 +59,26 @@ export async function sendOtp(req, res, next) {
     next(err);
   }
 }
+
+// Reset Password
+export async function resetPassword(req, res, next) {
+  try {
+    const { email, otpCode, newPassword } = req.body;
+
+    if (!email || !otpCode || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "email, otpCode and newPassword are required",
+      });
+    }
+    
+    await authService.resetPassword(email, otpCode, newPassword);
+
+    res.status(200).json({
+      success: true,
+      message: "Your Password Has been Updated",
+    });
+  } catch (err) {
+    next(err);
+  }
+}

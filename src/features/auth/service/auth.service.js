@@ -42,31 +42,30 @@ export async function register(userData) {
 
 //2- verify
 export async function verifyOTP(email, otpCode) {
-  //1.1 check if user exists
-  console.log("verify email:", JSON.stringify(email));
-
+  // 1- check user
   const user = await authRepository.checkUserEmailExists(email);
-  console.log("user found:", user);
-
-  //1.2 if not exist, throw an error
-  if (!user) throw userNotExist();
-  //2. check is verified or not
+  if (!user) throw userNotExist;
   if (user.isVerified) throw userVerified;
-  //3. check if otp is valid
+
+  // 2- check otp exists
   const otp = await authRepository.getOtpByEmail(email);
   if (!otp) throw otpExpired;
-  if (otp.otpCode !== otpCode) throw otpInvalid;
-  //4. if otp is valid, set isVerified to true
-  const updatedUser = await userRepository.updateUserByEmail(email, {
-    isVerified: true,
-  });
-  //5. delete otp
+
+  // 3- check expiry by time (don't rely only on the TTL index)
+  if (otp.expireAt <= new Date()) {
+    await authRepository.deleteOtpByEmail(email);
+    throw otpExpired;
+  }
+
+  // 4- keep the otp until it expires
+  if (String(otp.otpCode) !== String(otpCode)) throw otpInvalid;
+
+  // 5- delete the otp BEFORE updating the user
   await authRepository.deleteOtpByEmail(email);
 
-  //5. return user
-  return updatedUser;
+  // 6- mark user as verified
+  return userRepository.updateUserByEmail(email, { isVerified: true });
 }
-
 //3- login
 
 // export async function login(email, password) {
@@ -97,7 +96,6 @@ export async function login(email, password) {
   return generateToken({ id: user._id, name: user.name });
 }
 
-
 //4- reSend OTP
 
 export async function sendOtp(email) {
@@ -105,13 +103,10 @@ export async function sendOtp(email) {
   const user = await authRepository.checkUserEmailExists(email);
   if (!user) throw userNotExist;
 
-  // 2- if already verified, stop here (no OTP, no email)
-  if (user.isVerified === true) throw userVerified;
-
-  // 3- delete old otp if exists
+  // 2- delete old otp if exists
   await authRepository.deleteOtpByEmail(email);
 
-  // 4- generate and save new otp
+  // 3- generate and save new otp
   const otpCode = generateOtpCode();
   await authRepository.createOTP({
     otpCode,
@@ -119,10 +114,48 @@ export async function sendOtp(email) {
     expireAt: new Date(Date.now() + toMs(3, "minutes")),
   });
 
-  // 5- send email
+  // 4- send email
   await sendEmail(
     email,
     "New verification code",
     otpEmailTemplate({ name: user.name, otpCode, expiresInMinutes: 3 }),
   );
+}
+
+//5- forget password
+
+// export async function forgitPassword(email ,otpCode, newPassword) {
+//   // 1- check is user Exist
+//   const user =await authRepository.checkUserEmailExists
+//   // 2- throw Error if not exist
+//   if(!user) throw userNotExist;
+//   // 3- send OTP to email
+//   const sendOTP= await authRepository.createOTP;
+//   // 4- compaer OTP with DB
+//   const verifayOTP = user.otpCode === otpCode
+//   // 5- verifay OTP and reDairect To Create New password and confairm password
+// }
+
+export async function resetPassword(email, otpCode, newPassword) {
+  // 1- check otp exists
+  const otp = await authRepository.getOtpByEmail(email);
+  if (!otp) throw otpExpired;
+
+  // 2- check expiry by time
+  if (otp.expireAt <= new Date()) {
+    await authRepository.deleteOtpByEmail(email);
+    throw otpExpired;
+  }
+
+  // 3- wrong code: keep the otp until it expires
+  if (String(otp.otpCode) !== String(otpCode)) throw otpInvalid;
+
+  // 4- delete the otp BEFORE changing the password
+  await authRepository.deleteOtpByEmail(email);
+
+  // 5- hash and update password
+  const hashedPassword = await hashedPasswod(newPassword);
+  return userRepository.updateUserByEmail(email, {
+    password: hashedPassword,
+  });
 }

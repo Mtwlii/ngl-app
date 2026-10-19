@@ -1,9 +1,19 @@
 import { toMs } from "../../../common/Utils/time.js";
+import { validateBody } from "../../../common/validation/vakidation.js";
+import {
+  RegisterDto,
+  LoginDto,
+  ResetPasswordDto,
+  SendOtpDto,
+  VerifyAccountDto,
+} from "../dto/auth.dto.js";
 import * as authService from "../service/auth.service.js";
 
 export async function register(req, res, next) {
   try {
-    const createdUser = await authService.register(req.body);
+    //add layer for validation
+    const data = validateBody(RegisterDto, req.body);
+    const createdUser = await authService.register(data);
     res.status(201).json({
       success: true,
       message:
@@ -17,7 +27,9 @@ export async function register(req, res, next) {
 
 export async function verifyAccount(req, res, next) {
   try {
-    const { email, otpCode } = req.body;
+    //add layer for validation
+    const data = validateBody(VerifyAccountDto, req.body);
+    const { email, otpCode } = data;
     const updatedUser = await authService.verifyOTP(email, otpCode);
 
     res.status(200).json({
@@ -32,7 +44,9 @@ export async function verifyAccount(req, res, next) {
 
 export async function login(req, res, next) {
   try {
-    const { email, password } = req.body;
+    //add layer for validation
+    const data = validateBody(LoginDto, req.body);
+    const { email, password } = data;
     const token = await authService.login(email, password);
     res.cookie("access_token", token, {
       httpOnly: true, // secure: true,  // 100% secure
@@ -49,7 +63,9 @@ export async function login(req, res, next) {
 
 export async function sendOtp(req, res, next) {
   try {
-    const { email } = req.body;
+    //add layer for validation
+    const data = validateBody(SendOtpDto, req.body);
+    const { email } = data;
     await authService.sendOtp(email);
     res.status(200).json({
       success: true,
@@ -63,7 +79,9 @@ export async function sendOtp(req, res, next) {
 // Reset Password
 export async function resetPassword(req, res, next) {
   try {
-    const { email, otpCode, newPassword } = req.body;
+    //add layer for validation
+    const data = validateBody(ResetPasswordDto, req.body);
+    const { email, otpCode, newPassword } = data;
 
     if (!email || !otpCode || !newPassword) {
       return res.status(400).json({
@@ -71,7 +89,7 @@ export async function resetPassword(req, res, next) {
         message: "email, otpCode and newPassword are required",
       });
     }
-    
+
     await authService.resetPassword(email, otpCode, newPassword);
 
     res.status(200).json({

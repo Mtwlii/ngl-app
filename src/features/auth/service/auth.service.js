@@ -13,6 +13,7 @@ import {
 import { generateOtpCode } from "../../../common/Utils/otp.js";
 import { generateToken } from "../utils/token.js";
 import { comparePassword, hashedPasswod } from "../utils/hash.js";
+import { verifyGoogleToken } from "../../../common/Utils/google-auth.js";
 
 //1- register
 export async function register(userData) {
@@ -157,5 +158,32 @@ export async function resetPassword(email, otpCode, newPassword) {
   const hashedPassword = await hashedPasswod(newPassword);
   return userRepository.updateUserByEmail(email, {
     password: hashedPassword,
+  });
+}
+
+// ! Login With Google
+export async function loginWithGoogle(idToken) {
+  //1- verify idToken
+  const payload = await verifyGoogleToken(idToken);
+  console.log(payload);
+  //2- check user exist
+  const user = await authRepository.checkUserEmailExists(payload.email);
+  //3- if exist >> generate Token
+  if (user) {
+    return generateToken({
+      id: user.id,
+      email: user.email,
+    });
+  }
+  //4- if not exist >> Create User >> Generate Token
+  const createdUser = await authRepository.createUser({
+    name: payload.name,
+    email: payload.email,
+    provider: "google",
+    isVerified: true,
+  });
+  return generateToken({
+    id: createdUser._id,
+    email: createdUser.email,
   });
 }

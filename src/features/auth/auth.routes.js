@@ -16,8 +16,10 @@ authRouter.post("/login", authController.login);
 // resend OTP
 authRouter.post("/send-otp", otpLimiter, authController.sendOtp);
 
-// reset password (OTP)
 authRouter.patch("/reset-password", otpLimiter, authController.resetPassword);
+
+// Login With Google
+authRouter.patch("/login-with-google", authController.loginWithGoogle);
 
 // logout
 // authRouter.post("/logout", authController.logout);

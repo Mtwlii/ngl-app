@@ -3,7 +3,6 @@ export class AppError extends Error {
     // stack;
     // name;
     // cause;
- 
 
   statusCode;
   isOperational;

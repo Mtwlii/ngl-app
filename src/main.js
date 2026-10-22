@@ -7,9 +7,9 @@ import cors from "cors";
 import userRouter from "./app/user/user.routes.js";
 import messageRouter from "./app/message/message.routes.js";
 import authRouter from "./app/auth/auth.routes.js";
-import { connect } from "./common/DB/mongoose.js";
+import { connect } from "./lib/DB/mongoose.js";
 import { OTP } from "./app/auth/model/otp.model.js";
-import { logger } from "./common/logger/logger.js";
+import { logger } from "./pkg/logger/logger.js";
 connect();
 
 const app = express();

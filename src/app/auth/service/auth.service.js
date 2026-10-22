@@ -1,19 +1,19 @@
 import * as authRepository from "../repository/auth.repository.js";
 import * as userRepository from "../../user/repository/user.repository.js";
-import { sendEmail } from "../../../common/email/nodemailer.js";
-import { toMs } from "../../../common/Utils/time.js";
+import { sendEmail } from "../../../lib/email/nodemailer.js";
+import { toMs } from "../../../pkg/utils/time.js";
 import { otpExpired, otpInvalid, InvalidEmailOrPass } from "../errors.js";
-import { otpEmailTemplate } from "../../../common/email/otpTemplate.js";
+import { otpEmailTemplate } from "../../../lib/email/otpTemplate.js";
 import {
   userNotExist,
   userVerified,
   userAlreadyExists,
   userNotVerified,
 } from "../../user/errors.js";
-import { generateOtpCode } from "../../../common/Utils/otp.js";
+import { generateOtpCode } from "../../../lib/Utils/otp.js";
 import { generateToken } from "../utils/token.js";
 import { comparePassword, hashedPasswod } from "../utils/hash.js";
-import { verifyGoogleToken } from "../../../common/Utils/google-auth.js";
+import { verifyGoogleToken } from "../../../lib/Utils/google-auth.js";
 
 //1- register
 export async function register(userData) {

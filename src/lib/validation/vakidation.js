@@ -2,7 +2,7 @@
 // get 2 params
 // DTO vs Body
 import * as z from "zod";
-import { AppError } from "../error/error.js";
+import { AppError } from "../../pkg/error/error.js";
 
 export function validateBody(dto, body) {
   const result = dto.safeParse(body);

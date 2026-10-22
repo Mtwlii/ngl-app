@@ -1,5 +1,5 @@
-import { toMs } from "../../../common/Utils/time.js";
-import { validateBody } from "../../../common/validation/vakidation.js";
+import { toMs } from "../../../pkg/utils/time.js";
+import { validateBody } from "../../../lib/validation/vakidation.js";
 import {
   RegisterDto,
   LoginDto,

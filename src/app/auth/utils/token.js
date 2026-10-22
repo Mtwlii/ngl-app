@@ -1,4 +1,4 @@
-import { toMs } from "../../../common/Utils/time.js";
+import { toMs } from "../../../pkg/utils/time.js";
 import jwt from "jsonwebtoken"; 
 
 export function generateToken(payload) {

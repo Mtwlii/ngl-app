@@ -1,5 +1,5 @@
 import { OAuth2Client } from "google-auth-library";
-import { AppError } from "../error/error";
+import { AppError } from "../error/error.js";
 
 const client = new OAuth2Client();
 export async function verifyGoogleToken(idToken) {

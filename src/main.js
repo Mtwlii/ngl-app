@@ -4,11 +4,11 @@ import express from "express";
 import cors from "cors";
 
 // import routes
-import userRouter from "./features/user/user.routes.js";
-import messageRouter from "./features/message/message.routes.js";
-import authRouter from "./features/auth/auth.routes.js";
+import userRouter from "./app/user/user.routes.js";
+import messageRouter from "./app/message/message.routes.js";
+import authRouter from "./app/auth/auth.routes.js";
 import { connect } from "./common/DB/mongoose.js";
-import { OTP } from "./features/auth/model/otp.model.js";
+import { OTP } from "./app/auth/model/otp.model.js";
 import { logger } from "./common/logger/logger.js";
 connect();
 

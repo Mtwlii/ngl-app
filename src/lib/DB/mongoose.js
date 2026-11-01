@@ -1,9 +1,11 @@
 import mongoose from "mongoose";
+import { env } from "../config/env.js";
 
 export const connect = () => {
-    console.log(process.env.MONGO_URL);
+    // console.log(env.db.url);
+
     mongoose
-        .connect(process.env.MONGO_URL)
+        .connect(env.db.url)
         .then(() => {
             console.log("DB connected");
         })

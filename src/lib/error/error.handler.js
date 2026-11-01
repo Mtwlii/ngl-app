@@ -1,19 +1,13 @@
-import {logger} from "../../pkg/logger/logger.js";
-
-export function globalErrorHandler(err, req, res) {
-
-    // console.error(err.stack);
-    logger.error(err.message, {stack: err.stack});
-
+export function globalErrorHandler(err, _req, res, _next) {
     if (err.isOperational === true) {
         return res.status(err.statusCode).json({
             message: err.message,
-            success: false
-        })
+            success: false,
+        });
     }
-    return res.status(500).json({
-        message: 'Something went wrong',
-        success: false
-    })
-}
 
+    return res.status(500).json({
+        message: "Something went wrong, Internal Server Error",
+        success: false,
+    });
+}

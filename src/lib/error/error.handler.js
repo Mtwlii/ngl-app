@@ -1,4 +1,13 @@
-export function globalErrorHandler(err, _req, res, _next) {
+import { logger } from "../../pkg/logger/logger.js";
+
+export function globalErrorHandler(err, req, res, _next) {
+    const correlationId = req.correlationId;
+    
+    logger.error(err.message, {
+        stack: err.stack,
+        correlationId,
+    });
+
     if (err.isOperational === true) {
         return res.status(err.statusCode).json({
             message: err.message,

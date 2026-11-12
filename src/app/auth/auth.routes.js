@@ -1,6 +1,7 @@
 import { Router } from "express";
 import * as authController from "./controller/auth.controller.js";
 import { otpLimiter } from "../../lib/middlewares/rateLimiter.js";
+import { idempotency } from "../../lib/idempotency/idempotency.js";
 
 const authRouter = Router();
 
@@ -16,7 +17,8 @@ authRouter.post("/login", authController.login);
 // resend OTP
 authRouter.post("/send-otp", otpLimiter, authController.sendOtp);
 
-authRouter.patch("/reset-password", otpLimiter, authController.resetPassword);
+// reset password - idempotent route
+authRouter.patch("/reset-password", otpLimiter, idempotency(), authController.resetPassword);
 
 // Login With Google
 authRouter.patch("/login-with-google", authController.loginWithGoogle);

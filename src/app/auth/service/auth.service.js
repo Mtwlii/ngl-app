@@ -1,6 +1,7 @@
 import * as authRepository from "../repository/auth.repository.js";
 import * as userRepository from "../../user/repository/user.repository.js";
-import { sendEmail } from "../../../lib/email/nodemailer.js";
+// import { sendEmail } from "../../../lib/email/nodemailer.js";
+import { mailjetProvider } from './../../../lib/email/init.js';
 import { toMs } from "../../../pkg/utils/time.js";
 import { otpExpired, otpInvalid, InvalidEmailOrPass } from "../errors.js";
 import { otpEmailTemplate } from "../../../lib/email/otpTemplate.js";
@@ -33,7 +34,7 @@ export async function register(userData) {
     expireAt: new Date(Date.now() + toMs(5, "minutes")),
   });
   //6- return user
-  await sendEmail(
+  await mailjetProvider.sendMail(
     createdUser.email,
     "Verify your account",
     otpEmailTemplate({ name: createdUser.name, otpCode, expiresInMinutes: 5 }),
@@ -116,7 +117,7 @@ export async function sendOtp(email) {
   });
 
   // 4- send email
-  await sendEmail(
+  await mailjetProvider.sendMail(
     email,
     "New verification code",
     otpEmailTemplate({ name: user.name, otpCode, expiresInMinutes: 3 }),

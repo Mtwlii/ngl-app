@@ -1,5 +1,4 @@
 import { config } from "dotenv";
-import "dotenv/config";
 import { z } from "zod";
 config()
 const envSchema = z.object({
@@ -20,6 +19,10 @@ const envSchema = z.object({
   REDIS_HOST: z.string().min(1, { message: "REDIS_HOST is required" }),
   REDIS_PORT: z.string().transform((val) => parseInt(val, 10)),
   REDIS_PASSWORD: z.string().optional(),
+  MAILJET_API_KEY: z.string().min(1, { message: "MAILJET_API_KEY is required" }),
+  MAILJET_API_SECRET: z.string().min(1, { message: "MAILJET_API_SECRET is required" }),
+  MAILJET_FROM_EMAIL: z.string().email({ message: "MAILJET_FROM_EMAIL must be a valid email address" }),
+  MAILJET_FROM_NAME: z.string().min(1, { message: "MAILJET_FROM_NAME is required" }),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -38,6 +41,12 @@ export const env = {
   jwt: {
     secret: data.JWT_SECRET,
     expiresIn: data.JWT_EXPIRES_IN,
+  },
+  mailjet: {
+    apiKey: data.MAILJET_API_KEY,
+    apiSecret: data.MAILJET_API_SECRET,
+    fromEmail: data.MAILJET_FROM_EMAIL,
+    fromName: data.MAILJET_FROM_NAME,
   },
   googleOauth: { clientId: data.GOOGLE_OAUTH_CLIENT_ID },
   email: {

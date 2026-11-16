@@ -1,0 +1,1405 @@
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..2c71417
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,26 @@
++PORT=3000
++# optional: your frontend origin (enables CORS with cookies)
++# CLIENT_ORIGIN=http://localhost:5173
++NODE_ENV=development
++
++MONGO_URL=mongodb://127.0.0.1:27017/ngl-app
++
++JWT_SECRET=change-me-to-a-long-random-string
++JWT_EXPIRES_IN=3600
++
++GOOGLE_OAUTH_CLIENT_ID=
++
++REDIS_HOST=127.0.0.1
++REDIS_PORT=6379
++REDIS_PASSWORD=
++
++MAILJET_API_KEY=
++MAILJET_API_SECRET=
++MAILJET_FROM_EMAIL=
++MAILJET_FROM_NAME=
++
++# legacy nodemailer settings (still required by the env schema)
++EMAIL_USER=
++EMAIL_PASS=
++EMAIL_HOST=
++EMAIL_PORT=587
+diff --git a/package.json b/package.json
+index d5894b5..4648c34 100644
+--- a/package.json
++++ b/package.json
+@@ -1,13 +1,14 @@
+ {
+   "name": "ngl-app",
+   "version": "1.0.0",
+-  "description": "",
++  "description": "Anonymous messaging REST API (Node.js, Express 5, MongoDB, Redis) with OTP email verification and Google login",
+   "main": "src/server.js",
+   "type": "module",
+   "directories": {
+     "doc": "docs"
+   },
+   "scripts": {
++    "start": "node src/server.js",
+     "test": "echo \"Error: no test specified\" && exit 1",
+     "start:dev": " nodemon  .",
+     "start:watch": "node --watch ."
+diff --git a/requests.http b/requests.http
+index e34dd8f..d2db5a4 100644
+--- a/requests.http
++++ b/requests.http
+@@ -5,7 +5,7 @@ Content-Type: application/json
+ 
+ {
+   "name": "Metwally Moahmed",
+-  "email": "metooqasim@gmail.com",
++  "email": "user@example.com",
+   "password": "123456"
+ }
+ 
+@@ -14,7 +14,7 @@ Content-Type: application/json
+ # Content-Type: application/json
+ 
+ # {
+-#   "email": "metooqasim@gmail.com",
++#   "email": "user@example.com",
+ #   "otpCode": "858593"
+ # }
+ 
+diff --git a/src/app.js b/src/app.js
+index c027bc3..513ac1e 100644
+--- a/src/app.js
++++ b/src/app.js
+@@ -2,6 +2,7 @@ import express from "express";
+ import cors from "cors";
+ import { correlationId } from "./lib/correlation/correlationId.js";
+ import cookieParser from "cookie-parser";
++import { env } from "./lib/config/env.js";
+ 
+ 
+ import {globalErrorHandler} from "./lib/error/error.handler.js";
+@@ -10,7 +11,15 @@ import {router} from "./route.js";
+ export function createApp() {
+     const app = express();
+ 
+-    app.use(cors());
++    // behind a reverse proxy (Render/Railway/Nginx) req.ip would otherwise be the proxy's IP,
++    // which makes every rate limiter count all users as one
++    app.set("trust proxy", 1);
++
++    app.use(
++        env.clientOrigin
++            ? cors({origin: env.clientOrigin, credentials: true})
++            : cors(),
++    );
+     // get static path
+     app.use('/uploads', express.static("uploads"));
+     app.use(express.json());
+diff --git a/src/app/auth/auth.routes.js b/src/app/auth/auth.routes.js
+index 60db914..3f9a84c 100644
+--- a/src/app/auth/auth.routes.js
++++ b/src/app/auth/auth.routes.js
+@@ -1,6 +1,6 @@
+ import { Router } from "express";
+ import * as authController from "./controller/auth.controller.js";
+-import { otpLimiter } from "../../lib/middlewares/rateLimiter.js";
++import { loginLimiter, otpLimiter } from "../../lib/middlewares/rateLimiter.js";
+ import { idempotency } from "../../lib/idempotency/idempotency.js";
+ 
+ const authRouter = Router();
+@@ -12,18 +12,20 @@ authRouter.post("/register", authController.register);
+ authRouter.patch("/verify-account", otpLimiter, authController.verifyAccount);
+ 
+ // login
+-authRouter.post("/login", authController.login);
++authRouter.post("/login", loginLimiter, authController.login);
+ 
+ // resend OTP
+ authRouter.post("/send-otp", otpLimiter, authController.sendOtp);
+ 
+-// reset password - idempotent route
+-authRouter.patch("/reset-password", otpLimiter, idempotency(), authController.resetPassword);
++// reset password - idempotent route (when the client sends an Idempotency-Key header)
++authRouter.patch(
++  "/reset-password",
++  otpLimiter,
++  idempotency(),
++  authController.resetPassword,
++);
+ 
+-// Login With Google
+-authRouter.patch("/login-with-google", authController.loginWithGoogle);
+-
+-// logout
+-// authRouter.post("/logout", authController.logout);
++// Login With Google (POST: it creates a session; was PATCH)
++authRouter.post("/login-with-google", loginLimiter, authController.loginWithGoogle);
+ 
+ export default authRouter;
+diff --git a/src/app/auth/controller/auth.controller.js b/src/app/auth/controller/auth.controller.js
+index cc329ea..5cbf263 100644
+--- a/src/app/auth/controller/auth.controller.js
++++ b/src/app/auth/controller/auth.controller.js
+@@ -1,121 +1,77 @@
+-import { toMs } from "../../../pkg/utils/time.js";
+ import { validateBody } from "../../../lib/validation/vakidation.js";
++import { accessTokenCookieOptions } from "../../../lib/auth/cookie.js";
+ import {
+   RegisterDto,
+   LoginDto,
+   ResetPasswordDto,
+   SendOtpDto,
+   VerifyAccountDto,
++  GoogleLoginDto,
+ } from "../dto/auth.dto.js";
+ import * as authService from "../service/auth.service.js";
+ 
+-export async function register(req, res, next) {
+-  try {
+-    //add layer for validation
+-    const data = validateBody(RegisterDto, req.body);
+-    const createdUser = await authService.register(data);
+-    res.status(201).json({
+-      success: true,
+-      message:
+-        "User registered successfully. Please check your email for the activation OTP.",
+-      data: createdUser,
+-    });
+-  } catch (error) {
+-    next(error);
+-  }
+-}
+-
+-export async function verifyAccount(req, res, next) {
+-  try {
+-    //add layer for validation
+-    const data = validateBody(VerifyAccountDto, req.body);
+-    const { email, otpCode } = data;
+-    const updatedUser = await authService.verifyOTP(email, otpCode);
++// Express 5 forwards rejected promises to the error handler automatically,
++// so the try/catch + next(error) boilerplate is no longer needed here.
+ 
+-    res.status(200).json({
+-      success: true,
+-      message: "User verified successfully.",
+-      data: updatedUser,
+-    });
+-  } catch (error) {
+-    next(error);
+-  }
++export async function register(req, res) {
++  const data = validateBody(RegisterDto, req.body);
++  const createdUser = await authService.register(data);
++  res.status(201).json({
++    success: true,
++    message:
++      "User registered successfully. Please check your email for the activation OTP.",
++    data: createdUser,
++  });
+ }
+ 
+-export async function login(req, res, next) {
+-  try {
+-    //add layer for validation
+-    const data = validateBody(LoginDto, req.body);
+-    const { email, password } = data;
+-    const token = await authService.login(email, password);
+-    res.cookie("access_token", token, {
+-      httpOnly: true, // secure: true,  // 100% secure
+-      maxAge: toMs(1, "hours"), // session expires after 1 hour
+-    });
+-    res.status(200).json({
+-      success: true,
+-      message: "Login successful",
+-    });
+-  } catch (error) {
+-    next(error);
+-  }
++export async function verifyAccount(req, res) {
++  const { email, otpCode } = validateBody(VerifyAccountDto, req.body);
++  const updatedUser = await authService.verifyOTP(email, otpCode);
++  res.status(200).json({
++    success: true,
++    message: "User verified successfully.",
++    data: updatedUser,
++  });
+ }
+ 
+-export async function sendOtp(req, res, next) {
+-  try {
+-    //add layer for validation
+-    const data = validateBody(SendOtpDto, req.body);
+-    const { email } = data;
+-    await authService.sendOtp(email);
+-    res.status(200).json({
+-      success: true,
+-      message: "OTP sent successfully, Check Your email",
+-    });
+-  } catch (err) {
+-    next(err);
+-  }
++export async function login(req, res) {
++  const { email, password } = validateBody(LoginDto, req.body);
++  const token = await authService.login(email, password);
++  res.cookie("access_token", token, accessTokenCookieOptions);
++  res.status(200).json({
++    success: true,
++    message: "Login successful",
++  });
+ }
+ 
+-// Reset Password
+-export async function resetPassword(req, res, next) {
+-  try {
+-    //add layer for validation
+-    const data = validateBody(ResetPasswordDto, req.body);
+-    const { email, otpCode, newPassword } = data;
+-
+-    if (!email || !otpCode || !newPassword) {
+-      return res.status(400).json({
+-        success: false,
+-        message: "email, otpCode and newPassword are required",
+-      });
+-    }
+-
+-    await authService.resetPassword(email, otpCode, newPassword);
+-
+-    res.status(200).json({
+-      success: true,
+-      message: "Your Password Has been Updated",
+-    });
+-  } catch (err) {
+-    next(err);
+-  }
++export async function sendOtp(req, res) {
++  const { email } = validateBody(SendOtpDto, req.body);
++  await authService.sendOtp(email);
++  res.status(200).json({
++    success: true,
++    message: "OTP sent successfully, Check Your email",
++  });
+ }
+ 
+-//Login With google
++export async function resetPassword(req, res) {
++  const { email, otpCode, newPassword } = validateBody(
++    ResetPasswordDto,
++    req.body,
++  );
++  await authService.resetPassword(email, otpCode, newPassword);
++  res.status(200).json({
++    success: true,
++    message: "Your Password Has been Updated",
++  });
++}
+ 
+-export async function loginWithGoogle(req, res, next) {
+-  try {
+-    const token = await authService.loginWithGoogle(req.body.idToken);
+-    (res.cookie("access_token", token),
+-      {
+-        httpOnly: true,
+-        maxAge: toMs(1, "hours"),
+-      });
+-    res.json({
+-      message: "user login successfulley",
+-      success: true,
+-    });
+-  } catch (err) {
+-    next(err);
+-  }
++export async function loginWithGoogle(req, res) {
++  const { idToken } = validateBody(GoogleLoginDto, req.body);
++  const token = await authService.loginWithGoogle(idToken);
++  // options must be the 3rd argument of res.cookie (they were silently dropped before)
++  res.cookie("access_token", token, accessTokenCookieOptions);
++  res.status(200).json({
++    success: true,
++    message: "User login successful",
++  });
+ }
+diff --git a/src/app/auth/dto/auth.dto.js b/src/app/auth/dto/auth.dto.js
+index 92241df..9f305f4 100644
+--- a/src/app/auth/dto/auth.dto.js
++++ b/src/app/auth/dto/auth.dto.js
+@@ -3,12 +3,13 @@ import * as z from "zod";
+ const email = z.string().trim().toLowerCase().email();
+ const otpCode = z.string().trim().length(6);
+ const password = z.string().min(8).max(64);
++// keep the display name as typed (just trim + collapse spaces); limits match the Mongoose model (3-20)
+ const name = z
+   .string()
+   .trim()
+-  .toLowerCase()
+-  .transform((val) => val.replace(/\s+/g, ""))
+-  .pipe(z.string().min(2).max(32));
++  .transform((val) => val.replace(/\s+/g, " "))
++  .pipe(z.string().min(3).max(20));
++
+ export const RegisterDto = z.object({
+   email,
+   name,
+@@ -16,7 +17,7 @@ export const RegisterDto = z.object({
+   dob: z.coerce.date().optional(),
+   gender: z.enum(["male", "female", "other"]).default("other"),
+ });
+-// .strict()
++
+ export const LoginDto = z.object({
+   email,
+   password,
+@@ -36,3 +37,7 @@ export const ResetPasswordDto = z.object({
+   otpCode,
+   newPassword: password,
+ });
++
++export const GoogleLoginDto = z.object({
++  idToken: z.string().trim().min(1),
++});
+diff --git a/src/app/auth/repository/auth.repository.js b/src/app/auth/repository/auth.repository.js
+index 836b189..de9bceb 100644
+--- a/src/app/auth/repository/auth.repository.js
++++ b/src/app/auth/repository/auth.repository.js
+@@ -21,19 +21,7 @@ export async function getOtpByEmail(email) {
+   return await OTP.findOne({ email: email });
+ }
+ 
+-//delete otp
++// delete otp
+ export async function deleteOtpByEmail(email) {
+   return await OTP.deleteMany({ email: email });
+ }
+-
+-//is correct password
+-export async function isPasswordCorrect(password, hashedPassword) {
+-  return await bcrypt.compare(password, hashedPassword);
+-}
+-
+-//update user by email
+-// export async function updateUserByEmail(email, updatedData) {
+-//   return await User.findOneAndUpdate({ email }, updatedData, {
+-//     returnDocument: "after",
+-//   }); // {new: true} returns the updated document instead of the original one.
+-// }
+diff --git a/src/app/auth/service/auth.service.js b/src/app/auth/service/auth.service.js
+index d1bc4c3..d15371d 100644
+--- a/src/app/auth/service/auth.service.js
++++ b/src/app/auth/service/auth.service.js
+@@ -15,6 +15,7 @@ import { generateOtpCode } from "../../../lib/Utils/otp.js";
+ import { generateToken } from "../utils/token.js";
+ import { comparePassword, hashedPasswod } from "../utils/hash.js";
+ import { verifyGoogleToken } from "../../../lib/Utils/google-auth.js";
++import { AppError } from "../../../lib/error/error.js";
+ 
+ //1- register
+ export async function register(userData) {
+@@ -69,24 +70,6 @@ export async function verifyOTP(email, otpCode) {
+   return userRepository.updateUserByEmail(email, { isVerified: true });
+ }
+ //3- login
+-
+-// export async function login(email, password) {
+-//   //1. check if user exists
+-//   const user = await authRepository.checkUserEmailExists(email);
+-//   //2. if not exist, throw an error
+-//   if (!user) throw userNotExist;
+-//   // isVerified
+-//   if (user.isVerified === false) throw userNotVerified;
+-//   //3. if user exists, check if password is correct
+-//   const isPasswordCorrect = await comparePassword(password, user.password);
+-//   //4. if password is correct, return user
+-//   if (!isPasswordCorrect) throw InvalidEmailOrPass;
+-//   //5. if password is correct, generate Token
+-//   const token = generateToken({ id: user._id, name: user.name });
+-//   //7. return user
+-//   return token;
+-// }
+-
+ export async function login(email, password) {
+   const user = await authRepository.checkUserEmailExists(email);
+   if (!user) throw userNotExist;
+@@ -124,20 +107,7 @@ export async function sendOtp(email) {
+   );
+ }
+ 
+-//5- forget password
+-
+-// export async function forgitPassword(email ,otpCode, newPassword) {
+-//   // 1- check is user Exist
+-//   const user =await authRepository.checkUserEmailExists
+-//   // 2- throw Error if not exist
+-//   if(!user) throw userNotExist;
+-//   // 3- send OTP to email
+-//   const sendOTP= await authRepository.createOTP;
+-//   // 4- compaer OTP with DB
+-//   const verifayOTP = user.otpCode === otpCode
+-//   // 5- verifay OTP and reDairect To Create New password and confairm password
+-// }
+-
++//5- reset password
+ export async function resetPassword(email, otpCode, newPassword) {
+   // 1- check otp exists
+   const otp = await authRepository.getOtpByEmail(email);
+@@ -166,25 +136,25 @@ export async function resetPassword(email, otpCode, newPassword) {
+ export async function loginWithGoogle(idToken) {
+   //1- verify idToken
+   const payload = await verifyGoogleToken(idToken);
+-  console.log(payload);
++  if (!payload?.email || payload.email_verified !== true) {
++    throw new AppError("Google account email is not verified", 403);
++  }
++  const email = payload.email.toLowerCase();
+   //2- check user exist
+-  const user = await authRepository.checkUserEmailExists(payload.email);
++  const user = await authRepository.checkUserEmailExists(email);
+   //3- if exist >> generate Token
+   if (user) {
+-    return generateToken({
+-      id: user.id,
+-      email: user.email,
+-    });
++    return generateToken({ id: user.id, email: user.email });
+   }
+   //4- if not exist >> Create User >> Generate Token
+   const createdUser = await authRepository.createUser({
+-    name: payload.name,
+-    email: payload.email,
++    name: (String(payload.name ?? "").trim().length >= 3
++      ? String(payload.name).trim()
++      : email.split("@")[0]
++    ).slice(0, 20),
++    email,
+     provider: "google",
+     isVerified: true,
+   });
+-  return generateToken({
+-    id: createdUser._id,
+-    email: createdUser.email,
+-  });
++  return generateToken({ id: createdUser.id, email: createdUser.email });
+ }
+diff --git a/src/app/auth/utils/token.js b/src/app/auth/utils/token.js
+index ef916d1..625edf3 100644
+--- a/src/app/auth/utils/token.js
++++ b/src/app/auth/utils/token.js
+@@ -1,9 +1,8 @@
+ import { env } from "../../../lib/config/env.js";
+-import { toMs } from "../../../pkg/utils/time.js";
+ import jwt from "jsonwebtoken";
+ 
++// jsonwebtoken reads a numeric expiresIn as SECONDS, so use a string span here.
++// (It must match the cookie maxAge in lib/auth/cookie.js.)
+ export function generateToken(payload) {
+-  return jwt.sign(payload, env.jwt.secret, {
+-    expiresIn: toMs(1, "houres"),
+-  });
++  return jwt.sign(payload, env.jwt.secret, { expiresIn: "1h" });
+ }
+diff --git a/src/app/message/controller/message.controller.js b/src/app/message/controller/message.controller.js
+index 54dea9a..8f0b48a 100644
+--- a/src/app/message/controller/message.controller.js
++++ b/src/app/message/controller/message.controller.js
+@@ -2,47 +2,37 @@ import { sendMessageDto } from "../dto/message.dto.js";
+ import * as messageService from "../service/message.service.js";
+ import { validateBody } from "./../../../lib/validation/vakidation.js";
+ 
+-async function handleSend(req, res, next, sender) {
+-  try {
+-    validateBody(sendMessageDto, req.body);
+-    const { content, receiver } = req.body;
+-    // const sender = req.user && !isAnonymous ? req.user.id : null;
+-    const createdMessage = await messageService.sendMessage({
+-      content,
+-      receiver,
+-      sender,
+-    });
+-    res.status(201).json({
+-      message: "Message sent successfully",
+-      data: createdMessage,
+-      status: "success",
+-    });
+-  } catch (error) {
+-    next(error);
+-  }
++async function handleSend(req, res, sender) {
++  // use the VALIDATED data (trimmed / sanitized), not the raw body
++  const { content, receiver } = validateBody(sendMessageDto, req.body);
++  const createdMessage = await messageService.sendMessage({
++    content,
++    receiver,
++    sender,
++  });
++  res.status(201).json({
++    message: "Message sent successfully",
++    data: createdMessage,
++    status: "success",
++  });
+ }
+ 
+-// معروف: الـ sender من الـ token (authGuard ضامن إنه موجود)
+-export function sendMessage(req, res, next) {
+-  return handleSend(req, res, next, req.user.id);
++// known sender: taken from the token (authGuard guarantees it exists)
++export function sendMessage(req, res) {
++  return handleSend(req, res, req.user.id);
+ }
+ 
+-// مجهول
+-export function sendAnonymousMessage(req, res, next) {
+-  return handleSend(req, res, next, null);
++// anonymous
++export function sendAnonymousMessage(req, res) {
++  return handleSend(req, res, null);
+ }
+ 
+ // get all messages for a user
+-export async function getAllMessages(req, res, next) {
+-  try {
+-    const userId = req.user.id;
+-    const messages = await messageService.getAllMessages(userId);
+-    res.status(200).json({
+-      message: "Messages retrieved successfully",
+-      data: messages,
+-      status: "success",
+-    });
+-  } catch (error) {
+-    next(error);
+-  }
++export async function getAllMessages(req, res) {
++  const messages = await messageService.getAllMessages(req.user.id);
++  res.status(200).json({
++    message: "Messages retrieved successfully",
++    data: messages,
++    status: "success",
++  });
+ }
+diff --git a/src/app/message/dto/message.dto.js b/src/app/message/dto/message.dto.js
+index 67dc64c..dcfdd21 100644
+--- a/src/app/message/dto/message.dto.js
++++ b/src/app/message/dto/message.dto.js
+@@ -3,7 +3,8 @@ import { Types } from "mongoose";
+ import { z } from "zod";
+ 
+ export const sendMessageDto = z.object({
+-  content: z.string().trim().min(1).max(500),
++  // max must match the Mongoose model (200) - otherwise Mongoose rejects what Zod accepted
++  content: z.string().trim().min(1).max(200),
+   receiver: z
+     .string()
+     .trim()
+@@ -11,6 +12,4 @@ export const sendMessageDto = z.object({
+     .refine((val) => Types.ObjectId.isValid(val), {
+       message: "Receiver must be a valid ObjectId",
+     }),
+-  
+-  // isAnonymous: z.boolean().default(true),
+ });
+diff --git a/src/app/message/message.routes.js b/src/app/message/message.routes.js
+index f18b7cc..2a2c422 100644
+--- a/src/app/message/message.routes.js
++++ b/src/app/message/message.routes.js
+@@ -1,17 +1,21 @@
+ import { Router } from "express";
+ import * as messageController from "./controller/message.controller.js";
+ import { authGuard } from "../../lib/auth/guard.js";
++import { anonymousMessageLimiter } from "../../lib/middlewares/rateLimiter.js";
+ 
+ const messageRouter = Router();
+ 
+-// مرسل معروف: لازم token
++// known sender: token required
+ messageRouter.post("/send", authGuard, messageController.sendMessage);
+ 
+-// مجهول: من غير authGuard
+-messageRouter.post("/send/anonymous", messageController.sendAnonymousMessage);
++// anonymous: no token, but rate limited against spam
++messageRouter.post(
++  "/send/anonymous",
++  anonymousMessageLimiter,
++  messageController.sendAnonymousMessage,
++);
+ 
+-// allMessage
++// all messages of the logged-in user
+ messageRouter.get("/all-messages", authGuard, messageController.getAllMessages);
+ 
+-
+ export default messageRouter;
+diff --git a/src/app/message/model/message.model.js b/src/app/message/model/message.model.js
+index ea20529..1777939 100644
+--- a/src/app/message/model/message.model.js
++++ b/src/app/message/model/message.model.js
+@@ -27,5 +27,8 @@ const messageSchema = new Schema(
+   { timestamps: true },
+ );
+ 
++// inbox query: by receiver, newest first
++messageSchema.index({ receiver: 1, createdAt: -1 });
++
+ //Model
+ export const Message = model("Message", messageSchema);
+diff --git a/src/app/message/repository/message.repository.js b/src/app/message/repository/message.repository.js
+index 6d7647a..6cf9889 100644
+--- a/src/app/message/repository/message.repository.js
++++ b/src/app/message/repository/message.repository.js
+@@ -10,8 +10,11 @@ export async function saveMessage({ content, receiver, sender }) {
+ 
+ export async function getAllMessagesByUserId(userId) {
+   return await Message.find(
+-    { receiver: userId },
++    { receiver: userId, isDeleted: false },
+     {},
+-    { populate: { path: "sender", select: "id name email" } },
++    {
++      sort: { createdAt: -1 },
++      populate: { path: "sender", select: "id name email" },
++    },
+   );
+ }
+diff --git a/src/app/message/service/message.service.js b/src/app/message/service/message.service.js
+index 1aa1a69..10e8f5e 100644
+--- a/src/app/message/service/message.service.js
++++ b/src/app/message/service/message.service.js
+@@ -17,9 +17,7 @@ export async function sendMessage({ content, receiver, sender }) {
+   return await messageRepository.saveMessage({ content, receiver, sender });
+ }
+ 
+-// getAllMessage
++// getAllMessage: an empty inbox is not an error -> [] (was a 404)
+ export async function getAllMessages(userId) {
+-  const messages = await messageRepository.getAllMessagesByUserId(userId); //[{content: "hello", sender: "1", receiver: "2"}] | nul
+-  if (messages.length == 0) throw new AppError("No messages found", 404);
+-  return messages;
++  return await messageRepository.getAllMessagesByUserId(userId);
+ }
+diff --git a/src/app/user/controller/user.controller.js b/src/app/user/controller/user.controller.js
+index 2498126..74c43af 100644
+--- a/src/app/user/controller/user.controller.js
++++ b/src/app/user/controller/user.controller.js
+@@ -1,13 +1,16 @@
+ import * as userService from "../service/user.service.js";
+ 
+-export async function updateProfilePicController(req, res, next) {
+-  try {
+-    await userService.updateProfilePicService(
+-      req.user.id,
+-      req.file.path
+-    );
+-    res.json({ message: "upload profile successfully...", success: true });
+-  } catch (error) {
+-    next(error);
+-  }
++export async function updateProfilePicController(req, res) {
++  await userService.updateProfilePicService(req.user.id, req.file.path);
++  res.json({ message: "upload profile successfully...", success: true });
++}
++
++export async function updateCvController(req, res) {
++  await userService.updateCvService(req.user.id, req.file.path);
++  res.json({ message: "CV uploaded successfully", success: true });
++}
++
++export async function getAllUsersController(_req, res) {
++  const users = await userService.getAllUsers();
++  res.json({ success: true, data: users });
+ }
+diff --git a/src/app/user/model/user.model.js b/src/app/user/model/user.model.js
+index b908780..d7d46ed 100644
+--- a/src/app/user/model/user.model.js
++++ b/src/app/user/model/user.model.js
+@@ -55,7 +55,17 @@ const userSchema = new Schema(
+       type: String,
+     }
+   },
+-  { timestamps: true },
++  {
++    timestamps: true,
++    // never leak the password hash (or __v) in any JSON response
++    toJSON: {
++      transform(_doc, ret) {
++        delete ret.password;
++        delete ret.__v;
++        return ret;
++      },
++    },
++  },
+ );
+ 
+ //model
+diff --git a/src/app/user/repository/user.repository.js b/src/app/user/repository/user.repository.js
+index 58b2f1a..e81f0f7 100644
+--- a/src/app/user/repository/user.repository.js
++++ b/src/app/user/repository/user.repository.js
+@@ -17,3 +17,19 @@ export async function updateProfilePicPath(userId, profilePicPath) {
+     { returnDocument: "after" }
+   );
+ }
++
++
++export async function updateCvPath(userId, cvPath) {
++  return await User.findOneAndUpdate(
++    { _id: userId },
++    { cvPath },
++    { returnDocument: "after" }
++  );
++}
++
++// public-safe listing: only verified, non-deleted users, only their name (+ _id)
++export async function findPublicUsers() {
++  return await User.find({ isVerified: true, isDeleted: false })
++    .select("name")
++    .lean();
++}
+diff --git a/src/app/user/service/user.service.js b/src/app/user/service/user.service.js
+index fcb180d..ede0d90 100644
+--- a/src/app/user/service/user.service.js
++++ b/src/app/user/service/user.service.js
+@@ -1,17 +1,37 @@
+-import fs from "fs";
++import fs from "node:fs/promises";
+ import * as userRepository from "../repository/user.repository.js";
+-import { userNotExist } from './../errors.js';
++import { userNotExist } from "./../errors.js";
++
++// force: true => no error if the old file is already gone
++const removeFile = (path) => (path ? fs.rm(path, { force: true }) : undefined);
+ 
+ export async function updateProfilePicService(userId, newProfilePicPath) {
+-  // Find user to get old profile picture path
+   const user = await userRepository.findUserById(userId);
+-  if (!user) throw userNotExist;
++  if (!user) {
++    await removeFile(newProfilePicPath);
++    throw userNotExist;
++  }
++
++  const updated = await userRepository.updateProfilePicPath(
++    userId,
++    newProfilePicPath,
++  );
++  await removeFile(user.profilePicPath); // delete the old picture only after the DB update succeeded
++  return updated;
++}
+ 
+-  // Delete old profile picture from server if it exists
+-  if (user.profilePicPath) {
+-    fs.unlinkSync(user.profilePicPath);
++export async function updateCvService(userId, newCvPath) {
++  const user = await userRepository.findUserById(userId);
++  if (!user) {
++    await removeFile(newCvPath);
++    throw userNotExist;
+   }
+ 
+-  // Update user with new profile picture path
+-  return await userRepository.updateProfilePicPath(userId, newProfilePicPath);
++  const updated = await userRepository.updateCvPath(userId, newCvPath);
++  await removeFile(user.cvPath);
++  return updated;
++}
++
++export async function getAllUsers() {
++  return await userRepository.findPublicUsers();
+ }
+diff --git a/src/app/user/user.routes.js b/src/app/user/user.routes.js
+index d14b1d6..3621311 100644
+--- a/src/app/user/user.routes.js
++++ b/src/app/user/user.routes.js
+@@ -4,38 +4,39 @@ import {
+   allowedFields,
+   fileValidation,
+ } from "../../pkg/media/file.validation.js";
+-import { uploadFilesArray, uploadSingleFile } from "../../pkg/media/multer.js";
+-import { updateProfilePicController } from "./controller/user.controller.js";
++import { uploadSingleFile } from "../../pkg/media/multer.js";
++import {
++  getAllUsersController,
++  updateCvController,
++  updateProfilePicController,
++} from "./controller/user.controller.js";
+ import { authGuard } from "../../lib/auth/guard.js";
+-import { User } from "./model/user.model.js";
+ 
+ const userRouter = Router();
+ 
+-userRouter.get("/get-all-users", withCache, (_req, res) => {
+-  const data = User.find();
+-  res.json(data);
+-});
++// authenticated, cached for 60s (note: withCache(...) must be CALLED), public-safe fields only
++userRouter.get(
++  "/get-all-users",
++  authGuard,
++  withCache(60),
++  getAllUsersController,
++);
+ 
+ userRouter.post(
+   "/upload-profile-pic",
+   authGuard,
+-  uploadSingleFile("profilePic"),
++  uploadSingleFile("profilePic", allowedFields.images),
+   fileValidation(allowedFields.images),
+-  updateProfilePicController
++  updateProfilePicController,
+ );
+ 
+-// userRouter.post("/upload-cv", uploadFilesArray("cv", 5), (req, res) => {
+-//   res.json({ message: "CV uploaded successfully", file: req.file }).status(200);
+-// });
++// PDF only: file-type reports legacy .doc as application/x-cfb, so msword can't pass magic-number validation
+ userRouter.post(
+   "/upload-cv",
+-  uploadFilesArray("cv", 5),
+-  fileValidation(["application/pdf", "application/msword"]),
+-  (req, res) => {
+-    res
+-      .json({ message: "CV uploaded successfully", file: req.file })
+-      .status(200);
+-  },
++  authGuard,
++  uploadSingleFile("cv", ["application/pdf"]),
++  fileValidation(["application/pdf"]),
++  updateCvController,
+ );
+ 
+ export default userRouter;
+diff --git a/src/lib/DB/mongoose.js b/src/lib/DB/mongoose.js
+index 0cbc993..d9a3200 100644
+--- a/src/lib/DB/mongoose.js
++++ b/src/lib/DB/mongoose.js
+@@ -1,17 +1,11 @@
+ import mongoose from "mongoose";
+ import { env } from "../config/env.js";
++import { logger } from "../../pkg/logger/logger.js";
+ 
+-export const connect = () => {
+-    // console.log(env.db.url);
+-
+-    mongoose
+-        .connect(env.db.url)
+-        .then(() => {
+-            console.log("DB connected");
+-        })
+-        .catch((err) => {
+-            console.log("DB connection error____________: ", err);
+-        });
+-};
+-
+-// mongoose.connect("mongodb://127.0.0.1:27017/ngl-app")
+\ No newline at end of file
++// Returns the real promise so `await connect()` in server.js actually waits for MongoDB.
++// If the connection fails, the error propagates to main().catch -> logged + process exits,
++// instead of the server starting and every query hanging.
++export async function connect() {
++  await mongoose.connect(env.db.url);
++  logger.info("DB connected");
++}
+diff --git a/src/lib/auth/cookie.js b/src/lib/auth/cookie.js
+new file mode 100644
+index 0000000..36c3e72
+--- /dev/null
++++ b/src/lib/auth/cookie.js
+@@ -0,0 +1,10 @@
++import { toMs } from "../../pkg/utils/time.js";
++
++// Single source of truth for the auth cookie (used by login + Google login).
++// If your frontend lives on a different site, use sameSite: "none" (requires secure: true).
++export const accessTokenCookieOptions = {
++  httpOnly: true,
++  sameSite: "lax",
++  secure: process.env.NODE_ENV === "production",
++  maxAge: toMs(1, "hours"),
++};
+diff --git a/src/lib/auth/guard.js b/src/lib/auth/guard.js
+index 8d883e3..c821648 100644
+--- a/src/lib/auth/guard.js
++++ b/src/lib/auth/guard.js
+@@ -1,12 +1,13 @@
+ import { AppError } from "../error/error.js";
++import { env } from "../config/env.js";
+ import jwt from "jsonwebtoken";
+ 
+-export async function authGuard(req, res, next) {
++export async function authGuard(req, _res, next) {
+   try {
+     const token = req.cookies?.access_token;
+     if (!token)
+       throw new AppError("Unauthorized, no access token provided", 401);
+-    const payload = jwt.verify(token, process.env.JWT_SECRET);
++    const payload = jwt.verify(token, env.jwt.secret);
+     if (!payload?.id)
+       throw new AppError("Unauthorized, invalid access token", 401);
+     req.user = { id: payload.id };
+@@ -18,4 +19,4 @@ export async function authGuard(req, res, next) {
+         : new AppError("Unauthorized, invalid access token", 401),
+     );
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/src/lib/cache/withCache.js b/src/lib/cache/withCache.js
+index 9d69d6b..1919a32 100644
+--- a/src/lib/cache/withCache.js
++++ b/src/lib/cache/withCache.js
+@@ -1,27 +1,37 @@
+ import { cacheProvider } from "./init.js";
++import { logger } from "../../pkg/logger/logger.js";
+ 
++// Usage: router.get("/x", authGuard, withCache(60), handler)   <-- call it!
++// The key includes the user id, so per-user responses can't leak between users.
+ export function withCache(ttl = 3600) {
+   return async (req, res, next) => {
+-    // request is coming before or not
+-    let key = `${req.method}:${req.originalUrl}.`;
+-    const cached = await cacheProvider.get(key);
+-    if (cached && cached.length > 0) {
+-      res.setHeader("X-Cache", "HIT");
+-      // "GET:/products": "[{},{},..]"
+-      return res.status(200).json(JSON.parse(cached));
++    const key = `cache:${req.user?.id ?? "public"}:${req.method}:${req.originalUrl}`;
++
++    try {
++      const cached = await cacheProvider.get(key);
++      if (cached) {
++        res.setHeader("X-Cache", "HIT");
++        return res.status(200).json(JSON.parse(cached));
++      }
++    } catch (err) {
++      // fail open: serve from the DB if Redis is down
++      logger.warn("cache read failed", { error: err.message });
++      return next();
+     }
+-    // interceptor  >> cash and send res
++
+     const originalJson = res.json.bind(res);
+     res.json = async (body) => {
+-     if (res.statusCode >= 200 && res.statusCode < 300) {
+-       //1. cache body --> {message: "success", data: [{}, {}, ...]}
+-      await cacheProvider.set(key, JSON.stringify(body), ttl);
+-      //2. send req
+-      res.setHeader("X-Cache", "MISS");
+-     }
++      if (res.statusCode >= 200 && res.statusCode < 300) {
++        try {
++          await cacheProvider.set(key, JSON.stringify(body), ttl);
++          res.setHeader("X-Cache", "MISS");
++        } catch (err) {
++          logger.warn("cache write failed", { error: err.message });
++        }
++      }
+       return originalJson(body);
+     };
+ 
+     next();
+   };
+-}
+\ No newline at end of file
++}
+diff --git a/src/lib/config/env.js b/src/lib/config/env.js
+index cf3eb02..649eb2e 100644
+--- a/src/lib/config/env.js
++++ b/src/lib/config/env.js
+@@ -16,6 +16,9 @@ const envSchema = z.object({
+ 
+   GOOGLE_OAUTH_CLIENT_ID: z.string().min(1, { message: "GOOGLE_OAUTH_CLIENT_ID is required" }),
+ 
++  // frontend origin allowed by CORS (with cookies). Optional: when unset, CORS stays open without credentials.
++  CLIENT_ORIGIN: z.string().url().optional(),
++
+   REDIS_HOST: z.string().min(1, { message: "REDIS_HOST is required" }),
+   REDIS_PORT: z.string().transform((val) => parseInt(val, 10)),
+   REDIS_PASSWORD: z.string().optional(),
+@@ -37,6 +40,7 @@ const data = parsed.data; // <-- the actual values
+ 
+ export const env = {
+   port: data.PORT,
++  clientOrigin: data.CLIENT_ORIGIN,
+   db: { url: data.MONGO_URL },
+   jwt: {
+     secret: data.JWT_SECRET,
+diff --git a/src/lib/error/error.handler.js b/src/lib/error/error.handler.js
+index 8c560ef..b431cc3 100644
+--- a/src/lib/error/error.handler.js
++++ b/src/lib/error/error.handler.js
+@@ -1,22 +1,62 @@
+ import { logger } from "../../pkg/logger/logger.js";
+ 
++// Turn well-known library errors into client errors instead of a generic 500.
++function normalize(err) {
++  // multer (file too large, unexpected field, ...)
++  if (err?.name === "MulterError") {
++    const message =
++      err.code === "LIMIT_FILE_SIZE"
++        ? "File size exceeds the limit of 5MB"
++        : err.message;
++    return { statusCode: 400, message };
++  }
++  // mongoose schema validation
++  if (err?.name === "ValidationError" && err.errors) {
++    const message = Object.values(err.errors)
++      .map((e) => e.message)
++      .join(", ");
++    return { statusCode: 400, message };
++  }
++  // mongoose bad ObjectId etc.
++  if (err?.name === "CastError") {
++    return { statusCode: 400, message: `Invalid ${err.path}` };
++  }
++  // duplicate key (e.g. two simultaneous registrations with the same email)
++  if (err?.code === 11000) {
++    return { statusCode: 409, message: "Resource already exists" };
++  }
++  // malformed JSON body
++  if (err?.type === "entity.parse.failed") {
++    return { statusCode: 400, message: "Invalid JSON body" };
++  }
++  return null;
++}
++
+ export function globalErrorHandler(err, req, res, _next) {
+-    const correlationId = req.correlationId;
+-    
+-    logger.error(err.message, {
+-        stack: err.stack,
+-        correlationId,
+-    });
++  const correlationId = req.correlationId;
+ 
+-    if (err.isOperational === true) {
+-        return res.status(err.statusCode).json({
+-            message: err.message,
+-            success: false,
+-        });
+-    }
++  logger.error(err.message, {
++    stack: err.stack,
++    correlationId,
++  });
+ 
+-    return res.status(500).json({
+-        message: "Something went wrong, Internal Server Error",
+-        success: false,
++  if (err.isOperational === true) {
++    return res.status(err.statusCode).json({
++      message: err.message,
++      success: false,
+     });
+-}
+\ No newline at end of file
++  }
++
++  const known = normalize(err);
++  if (known) {
++    return res.status(known.statusCode).json({
++      message: known.message,
++      success: false,
++    });
++  }
++
++  return res.status(500).json({
++    message: "Something went wrong, Internal Server Error",
++    success: false,
++  });
++}
+diff --git a/src/lib/idempotency/idempotency.js b/src/lib/idempotency/idempotency.js
+index 97e9214..7ab92d9 100644
+--- a/src/lib/idempotency/idempotency.js
++++ b/src/lib/idempotency/idempotency.js
+@@ -1,21 +1,37 @@
+ import { cacheProvider } from "../cache/init.js";
++import { logger } from "../../pkg/logger/logger.js";
+ 
+-export function idempotency(ttl = 33600) {
++// Opt-in: only active when the client sends an `Idempotency-Key` header.
++// The key is scoped per method + url + client (user id or IP) so two different
++// clients can never collide, and a missing header never creates a shared key.
++export function idempotency(ttl = 60 * 60 * 24) {
+   return async function (req, res, next) {
+     const idempotencyKey = req.headers["idempotency-key"];
+-    let key = `{req.method}:${req.originalUrl}:${idempotencyKey}`;
+-    const cached = await cacheProvider.get(key);
+-    if (cached) {
+-      res.setHeader("X-Cache", "HIT");
+-      return res.status(409).json(JSON.parse(cached));
++    if (!idempotencyKey) return next();
++
++    const key = `idem:${req.method}:${req.originalUrl}:${req.user?.id ?? req.ip}:${idempotencyKey}`;
++
++    try {
++      const cached = await cacheProvider.get(key);
++      if (cached) {
++        res.setHeader("X-Cache", "HIT");
++        return res.status(409).json(JSON.parse(cached));
++      }
++    } catch (err) {
++      // fail open: a cache outage must not take the endpoint down
++      logger.warn("idempotency cache read failed", { error: err.message });
++      return next();
+     }
+ 
+     const originalJson = res.json.bind(res);
+-
+     res.json = async (body) => {
+       if (res.statusCode >= 200 && res.statusCode < 300) {
+-        await cacheProvider.set(key, JSON.stringify(body), ttl);
+-        res.setHeader("X-Cache", "MISS");
++        try {
++          await cacheProvider.set(key, JSON.stringify(body), ttl);
++          res.setHeader("X-Cache", "MISS");
++        } catch (err) {
++          logger.warn("idempotency cache write failed", { error: err.message });
++        }
+       }
+       return originalJson(body);
+     };
+diff --git a/src/lib/middlewares/rateLimiter.js b/src/lib/middlewares/rateLimiter.js
+index 8744f2b..e0e4884 100644
+--- a/src/lib/middlewares/rateLimiter.js
++++ b/src/lib/middlewares/rateLimiter.js
+@@ -1,12 +1,26 @@
+ import rateLimit from "express-rate-limit";
+ 
+-export const otpLimiter = rateLimit({
+-  windowMs: 5 * 60 * 1000, // 5 minutes
+-  max: 5, // 5 requests per IP in each window
+-  standardHeaders: true,
+-  legacyHeaders: false,
+-  message: {
+-    success: false,
+-    message: "Too many attempts, please try again later",
+-  },
+-});
+\ No newline at end of file
++function limiter({ windowMs, limit }) {
++  return rateLimit({
++    windowMs,
++    limit,
++    standardHeaders: true,
++    legacyHeaders: false,
++    message: {
++      success: false,
++      message: "Too many attempts, please try again later",
++    },
++  });
++}
++
++// 5 requests per IP / 5 minutes
++export const otpLimiter = limiter({ windowMs: 5 * 60 * 1000, limit: 5 });
++
++// brute-force protection on /auth/login
++export const loginLimiter = limiter({ windowMs: 15 * 60 * 1000, limit: 10 });
++
++// spam protection on anonymous messages
++export const anonymousMessageLimiter = limiter({
++  windowMs: 60 * 1000,
++  limit: 10,
++});
+diff --git a/src/pkg/media/file.validation.js b/src/pkg/media/file.validation.js
+index e571260..a0108f0 100644
+--- a/src/pkg/media/file.validation.js
++++ b/src/pkg/media/file.validation.js
+@@ -1,53 +1,39 @@
+-import { fileTypeFromBuffer } from "file-type";
+-import fs from "fs";
++import { fileTypeFromFile } from "file-type";
++import fs from "node:fs/promises";
+ import { AppError } from "../../lib/error/error.js";
+ 
+-// allowed file types are specified in the allowedTypes array
++// allowed file types (real MIME types detected from the file's magic number)
+ export const allowedFields = {
+   images: ["image/jpeg", "image/png"],
+-  documents: ["application/pdf", "application/msword"],
+-  videos: ["video/mp4", "video/avi"],
++  documents: ["application/pdf"],
++  videos: ["video/mp4"],
+   audio: ["audio/mpeg", "audio/wav"],
+   archives: ["application/zip", "application/x-tar"],
+-  all: [
+-    "image/jpeg",
+-    "image/png",
+-    "application/pdf",
+-    "application/msword",
+-    "video/mp4",
+-    "video/avi",
+-    "audio/mpeg",
+-    "audio/wav",
+-    "application/zip",
+-    "application/x-tar",
+-  ],
+ };
+ 
+-// Middleware to validate file type by magic number (file signatures)
++const removeFiles = (files) =>
++  Promise.all(files.map((f) => fs.rm(f.path, { force: true })));
++
++// Middleware: validates uploaded file(s) by magic number. Works with .single() and .array().
++// Reads only the file header from disk (fileTypeFromFile) instead of loading the whole file in RAM.
+ export const fileValidation =
+   (allowedTypes = allowedFields.images) =>
+   async (req, _res, next) => {
++    const files = req.files ?? (req.file ? [req.file] : []);
+     try {
+-      //check size of the uploaded file
+-      const fileSize = req.file.size;
+-      const maxSize = 5 * 1024 * 1024; // 5MB
+-      if (fileSize > maxSize) {
+-        fs.unlinkSync(req.file.path);
+-        return next(new AppError("File size exceeds the limit of 5MB", 400));
++      if (files.length === 0) {
++        return next(new AppError("File is required", 400));
+       }
+-      // get the file path
+-      const filePath = req.file.path;
+-      // read the file and return buffer
+-      const buffer = fs.readFileSync(filePath);
+-      // get the file type
+-      const type = await fileTypeFromBuffer(buffer);
+-      // validate
+-      if (!type || !allowedTypes.includes(type.mime)) {
+-        fs.unlinkSync(filePath);
+-        return next(new AppError("Invalid file type", 400));
++      for (const file of files) {
++        const type = await fileTypeFromFile(file.path);
++        if (!type || !allowedTypes.includes(type.mime)) {
++          await removeFiles(files);
++          return next(new AppError("Invalid file type", 400));
++        }
+       }
+       return next();
+     } catch (error) {
+-      return next(new AppError("Internal server error", 500));
++      await removeFiles(files).catch(() => {});
++      return next(error);
+     }
+   };
+diff --git a/src/pkg/media/multer.js b/src/pkg/media/multer.js
+index 6fafc26..5511075 100644
+--- a/src/pkg/media/multer.js
++++ b/src/pkg/media/multer.js
+@@ -1,19 +1,17 @@
+-import crypto from "crypto";
++import crypto from "node:crypto";
++import path from "node:path";
+ import multer, { diskStorage } from "multer";
+ import { AppError } from "../../lib/error/error.js";
+ 
+-// storage configuration
+-// 1- disk storage --> saves files directly to disk hdd
+-//  where to save the files on disk
+-//  what is file name
+-// 2- memory storage --> ram for temporary storage
++export const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB, enforced while streaming (not after the upload finished)
+ 
+ function multerUpload(
+-  allawedType = ["image/jpeg", "image/png", "application/pdf"],
++  allowedTypes = ["image/jpeg", "image/png", "application/pdf"],
+ ) {
+   return multer({
+-    fileFilter: function (_req, file, cb) {
+-      if (allawedType.includes(file.mimetype)) {
++    limits: { fileSize: MAX_FILE_SIZE },
++    fileFilter(_req, file, cb) {
++      if (allowedTypes.includes(file.mimetype)) {
+         cb(null, true);
+       } else {
+         cb(new AppError("Invalid file type", 400), false);
+@@ -21,29 +19,21 @@ function multerUpload(
+     },
+     storage: diskStorage({
+       destination: "uploads",
+-      filename: function (_req, file, cb) {
+-        console.log(file); //{ fieldname, originalname, encoding, mimetype, buffer, size }
+-        //pdf files will have .pdf extension
+-        // cb(null, Date.now() + '-' + file.originalname.split('.').pop());
+-        cb(null, crypto.randomUUID() + "-" + file.originalname);
++      // random name + the original extension only: the client-supplied filename never touches the disk
++      filename(_req, file, cb) {
++        const ext = path.extname(file.originalname).toLowerCase().slice(0, 10);
++        cb(null, `${crypto.randomUUID()}${ext}`);
+       },
+     }),
+   });
+ }
+ 
+-export function uploadSingleFile(
+-  fileName,
+-  allawedType = ["image/jpeg", "image/png", "application/pdf"],
+-) {
+-  return multerUpload(allawedType).single(fileName);
++export function uploadSingleFile(fileName, allowedTypes) {
++  return multerUpload(allowedTypes).single(fileName);
+ }
+-export function uploadFilesArray(
+-  fileName,
+-  maxCount,
+-  allawedType = ["application/pdf", "application/msword"],
+-) {
+-  return multerUpload(allawedType).array(fileName, maxCount);
++export function uploadFilesArray(fileName, maxCount, allowedTypes) {
++  return multerUpload(allowedTypes).array(fileName, maxCount);
+ }
+-export function uploadFieldsFile(fields) {
+-  return multerUpload().fields(fields);
++export function uploadFieldsFile(fields, allowedTypes) {
++  return multerUpload(allowedTypes).fields(fields);
+ }
+diff --git a/src/pkg/utils/time.js b/src/pkg/utils/time.js
+index 80137c6..9a9116d 100644
+--- a/src/pkg/utils/time.js
++++ b/src/pkg/utils/time.js
+@@ -1,15 +1,18 @@
+-//For hunde Time
++// Time helpers.
++// NOTE: "houres" is kept as a backward-compatible alias of "hours".
+ export function toMs(time, unit) {
+   switch (unit) {
+     case "seconds":
+       return time * 1000;
+     case "minutes":
+       return time * 60 * 1000;
++    case "hours":
+     case "houres":
+       return time * 60 * 60 * 1000;
+-
++    case "days":
++      return time * 24 * 60 * 60 * 1000;
+     default:
+-      return time;
++      throw new Error(`toMs: unsupported unit "${unit}"`);
+   }
+ }
+ 
+@@ -19,9 +22,12 @@ export function toSeconds(time, unit) {
+       return time / 1000;
+     case "minutes":
+       return time * 60;
++    case "hours":
+     case "houres":
+       return time * 60 * 60;
++    case "days":
++      return time * 24 * 60 * 60;
+     default:
+-      return time;
++      throw new Error(`toSeconds: unsupported unit "${unit}"`);
+   }
+ }
+diff --git a/src/server.js b/src/server.js
+index 316fdf3..45659ed 100644
+--- a/src/server.js
++++ b/src/server.js
+@@ -12,7 +12,6 @@ async function main() {
+   await connect();
+ 
+   const app = createApp();
+-  let a =  "ahme  Mohamed 'waael'"
+   const server = http.createServer(app);
+ 
+   server.listen(env.port, () => {

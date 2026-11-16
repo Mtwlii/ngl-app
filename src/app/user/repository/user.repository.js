@@ -17,3 +17,19 @@ export async function updateProfilePicPath(userId, profilePicPath) {
     { returnDocument: "after" }
   );
 }
+
+
+export async function updateCvPath(userId, cvPath) {
+  return await User.findOneAndUpdate(
+    { _id: userId },
+    { cvPath },
+    { returnDocument: "after" }
+  );
+}
+
+// public-safe listing: only verified, non-deleted users, only their name (+ _id)
+export async function findPublicUsers() {
+  return await User.find({ isVerified: true, isDeleted: false })
+    .select("name")
+    .lean();
+}

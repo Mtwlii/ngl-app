@@ -1,9 +1,8 @@
 import { env } from "../../../lib/config/env.js";
-import { toMs } from "../../../pkg/utils/time.js";
 import jwt from "jsonwebtoken";
 
+// jsonwebtoken reads a numeric expiresIn as SECONDS, so use a string span here.
+// (It must match the cookie maxAge in lib/auth/cookie.js.)
 export function generateToken(payload) {
-  return jwt.sign(payload, env.jwt.secret, {
-    expiresIn: toMs(1, "houres"),
-  });
+  return jwt.sign(payload, env.jwt.secret, { expiresIn: "1h" });
 }

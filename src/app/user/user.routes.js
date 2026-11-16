@@ -4,38 +4,39 @@ import {
   allowedFields,
   fileValidation,
 } from "../../pkg/media/file.validation.js";
-import { uploadFilesArray, uploadSingleFile } from "../../pkg/media/multer.js";
-import { updateProfilePicController } from "./controller/user.controller.js";
+import { uploadSingleFile } from "../../pkg/media/multer.js";
+import {
+  getAllUsersController,
+  updateCvController,
+  updateProfilePicController,
+} from "./controller/user.controller.js";
 import { authGuard } from "../../lib/auth/guard.js";
-import { User } from "./model/user.model.js";
 
 const userRouter = Router();
 
-userRouter.get("/get-all-users", withCache, (_req, res) => {
-  const data = User.find();
-  res.json(data);
-});
+// authenticated, cached for 60s (note: withCache(...) must be CALLED), public-safe fields only
+userRouter.get(
+  "/get-all-users",
+  authGuard,
+  withCache(60),
+  getAllUsersController,
+);
 
 userRouter.post(
   "/upload-profile-pic",
   authGuard,
-  uploadSingleFile("profilePic"),
+  uploadSingleFile("profilePic", allowedFields.images),
   fileValidation(allowedFields.images),
-  updateProfilePicController
+  updateProfilePicController,
 );
 
-// userRouter.post("/upload-cv", uploadFilesArray("cv", 5), (req, res) => {
-//   res.json({ message: "CV uploaded successfully", file: req.file }).status(200);
-// });
+// PDF only: file-type reports legacy .doc as application/x-cfb, so msword can't pass magic-number validation
 userRouter.post(
   "/upload-cv",
-  uploadFilesArray("cv", 5),
-  fileValidation(["application/pdf", "application/msword"]),
-  (req, res) => {
-    res
-      .json({ message: "CV uploaded successfully", file: req.file })
-      .status(200);
-  },
+  authGuard,
+  uploadSingleFile("cv", ["application/pdf"]),
+  fileValidation(["application/pdf"]),
+  updateCvController,
 );
 
 export default userRouter;

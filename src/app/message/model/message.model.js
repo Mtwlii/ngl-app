@@ -27,5 +27,8 @@ const messageSchema = new Schema(
   { timestamps: true },
 );
 
+// inbox query: by receiver, newest first
+messageSchema.index({ receiver: 1, createdAt: -1 });
+
 //Model
 export const Message = model("Message", messageSchema);

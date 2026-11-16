@@ -16,6 +16,9 @@ const envSchema = z.object({
 
   GOOGLE_OAUTH_CLIENT_ID: z.string().min(1, { message: "GOOGLE_OAUTH_CLIENT_ID is required" }),
 
+  // frontend origin allowed by CORS (with cookies). Optional: when unset, CORS stays open without credentials.
+  CLIENT_ORIGIN: z.string().url().optional(),
+
   REDIS_HOST: z.string().min(1, { message: "REDIS_HOST is required" }),
   REDIS_PORT: z.string().transform((val) => parseInt(val, 10)),
   REDIS_PASSWORD: z.string().optional(),
@@ -37,6 +40,7 @@ const data = parsed.data; // <-- the actual values
 
 export const env = {
   port: data.PORT,
+  clientOrigin: data.CLIENT_ORIGIN,
   db: { url: data.MONGO_URL },
   jwt: {
     secret: data.JWT_SECRET,

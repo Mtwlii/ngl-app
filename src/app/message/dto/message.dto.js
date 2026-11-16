@@ -3,7 +3,8 @@ import { Types } from "mongoose";
 import { z } from "zod";
 
 export const sendMessageDto = z.object({
-  content: z.string().trim().min(1).max(500),
+  // max must match the Mongoose model (200) - otherwise Mongoose rejects what Zod accepted
+  content: z.string().trim().min(1).max(200),
   receiver: z
     .string()
     .trim()
@@ -11,6 +12,4 @@ export const sendMessageDto = z.object({
     .refine((val) => Types.ObjectId.isValid(val), {
       message: "Receiver must be a valid ObjectId",
     }),
-  
-  // isAnonymous: z.boolean().default(true),
 });

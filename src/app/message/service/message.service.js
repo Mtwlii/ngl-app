@@ -17,9 +17,7 @@ export async function sendMessage({ content, receiver, sender }) {
   return await messageRepository.saveMessage({ content, receiver, sender });
 }
 
-// getAllMessage
+// getAllMessage: an empty inbox is not an error -> [] (was a 404)
 export async function getAllMessages(userId) {
-  const messages = await messageRepository.getAllMessagesByUserId(userId); //[{content: "hello", sender: "1", receiver: "2"}] | nul
-  if (messages.length == 0) throw new AppError("No messages found", 404);
-  return messages;
+  return await messageRepository.getAllMessagesByUserId(userId);
 }

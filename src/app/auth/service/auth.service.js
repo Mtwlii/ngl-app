@@ -15,6 +15,7 @@ import { generateOtpCode } from "../../../lib/Utils/otp.js";
 import { generateToken } from "../utils/token.js";
 import { comparePassword, hashedPasswod } from "../utils/hash.js";
 import { verifyGoogleToken } from "../../../lib/Utils/google-auth.js";
+import { AppError } from "../../../lib/error/error.js";
 
 //1- register
 export async function register(userData) {
@@ -69,24 +70,6 @@ export async function verifyOTP(email, otpCode) {
   return userRepository.updateUserByEmail(email, { isVerified: true });
 }
 //3- login
-
-// export async function login(email, password) {
-//   //1. check if user exists
-//   const user = await authRepository.checkUserEmailExists(email);
-//   //2. if not exist, throw an error
-//   if (!user) throw userNotExist;
-//   // isVerified
-//   if (user.isVerified === false) throw userNotVerified;
-//   //3. if user exists, check if password is correct
-//   const isPasswordCorrect = await comparePassword(password, user.password);
-//   //4. if password is correct, return user
-//   if (!isPasswordCorrect) throw InvalidEmailOrPass;
-//   //5. if password is correct, generate Token
-//   const token = generateToken({ id: user._id, name: user.name });
-//   //7. return user
-//   return token;
-// }
-
 export async function login(email, password) {
   const user = await authRepository.checkUserEmailExists(email);
   if (!user) throw userNotExist;
@@ -124,20 +107,7 @@ export async function sendOtp(email) {
   );
 }
 
-//5- forget password
-
-// export async function forgitPassword(email ,otpCode, newPassword) {
-//   // 1- check is user Exist
-//   const user =await authRepository.checkUserEmailExists
-//   // 2- throw Error if not exist
-//   if(!user) throw userNotExist;
-//   // 3- send OTP to email
-//   const sendOTP= await authRepository.createOTP;
-//   // 4- compaer OTP with DB
-//   const verifayOTP = user.otpCode === otpCode
-//   // 5- verifay OTP and reDairect To Create New password and confairm password
-// }
-
+//5- reset password
 export async function resetPassword(email, otpCode, newPassword) {
   // 1- check otp exists
   const otp = await authRepository.getOtpByEmail(email);
@@ -166,25 +136,25 @@ export async function resetPassword(email, otpCode, newPassword) {
 export async function loginWithGoogle(idToken) {
   //1- verify idToken
   const payload = await verifyGoogleToken(idToken);
-  console.log(payload);
+  if (!payload?.email || payload.email_verified !== true) {
+    throw new AppError("Google account email is not verified", 403);
+  }
+  const email = payload.email.toLowerCase();
   //2- check user exist
-  const user = await authRepository.checkUserEmailExists(payload.email);
+  const user = await authRepository.checkUserEmailExists(email);
   //3- if exist >> generate Token
   if (user) {
-    return generateToken({
-      id: user.id,
-      email: user.email,
-    });
+    return generateToken({ id: user.id, email: user.email });
   }
   //4- if not exist >> Create User >> Generate Token
   const createdUser = await authRepository.createUser({
-    name: payload.name,
-    email: payload.email,
+    name: (String(payload.name ?? "").trim().length >= 3
+      ? String(payload.name).trim()
+      : email.split("@")[0]
+    ).slice(0, 20),
+    email,
     provider: "google",
     isVerified: true,
   });
-  return generateToken({
-    id: createdUser._id,
-    email: createdUser.email,
-  });
+  return generateToken({ id: createdUser.id, email: createdUser.email });
 }

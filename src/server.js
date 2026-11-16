@@ -12,7 +12,6 @@ async function main() {
   await connect();
 
   const app = createApp();
-  let a =  "ahme  Mohamed 'waael'"
   const server = http.createServer(app);
 
   server.listen(env.port, () => {

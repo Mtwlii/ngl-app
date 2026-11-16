@@ -55,7 +55,17 @@ const userSchema = new Schema(
       type: String,
     }
   },
-  { timestamps: true },
+  {
+    timestamps: true,
+    // never leak the password hash (or __v) in any JSON response
+    toJSON: {
+      transform(_doc, ret) {
+        delete ret.password;
+        delete ret.__v;
+        return ret;
+      },
+    },
+  },
 );
 
 //model

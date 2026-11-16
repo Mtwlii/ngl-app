@@ -1,53 +1,39 @@
-import { fileTypeFromBuffer } from "file-type";
-import fs from "fs";
+import { fileTypeFromFile } from "file-type";
+import fs from "node:fs/promises";
 import { AppError } from "../../lib/error/error.js";
 
-// allowed file types are specified in the allowedTypes array
+// allowed file types (real MIME types detected from the file's magic number)
 export const allowedFields = {
   images: ["image/jpeg", "image/png"],
-  documents: ["application/pdf", "application/msword"],
-  videos: ["video/mp4", "video/avi"],
+  documents: ["application/pdf"],
+  videos: ["video/mp4"],
   audio: ["audio/mpeg", "audio/wav"],
   archives: ["application/zip", "application/x-tar"],
-  all: [
-    "image/jpeg",
-    "image/png",
-    "application/pdf",
-    "application/msword",
-    "video/mp4",
-    "video/avi",
-    "audio/mpeg",
-    "audio/wav",
-    "application/zip",
-    "application/x-tar",
-  ],
 };
 
-// Middleware to validate file type by magic number (file signatures)
+const removeFiles = (files) =>
+  Promise.all(files.map((f) => fs.rm(f.path, { force: true })));
+
+// Middleware: validates uploaded file(s) by magic number. Works with .single() and .array().
+// Reads only the file header from disk (fileTypeFromFile) instead of loading the whole file in RAM.
 export const fileValidation =
   (allowedTypes = allowedFields.images) =>
   async (req, _res, next) => {
+    const files = req.files ?? (req.file ? [req.file] : []);
     try {
-      //check size of the uploaded file
-      const fileSize = req.file.size;
-      const maxSize = 5 * 1024 * 1024; // 5MB
-      if (fileSize > maxSize) {
-        fs.unlinkSync(req.file.path);
-        return next(new AppError("File size exceeds the limit of 5MB", 400));
+      if (files.length === 0) {
+        return next(new AppError("File is required", 400));
       }
-      // get the file path
-      const filePath = req.file.path;
-      // read the file and return buffer
-      const buffer = fs.readFileSync(filePath);
-      // get the file type
-      const type = await fileTypeFromBuffer(buffer);
-      // validate
-      if (!type || !allowedTypes.includes(type.mime)) {
-        fs.unlinkSync(filePath);
-        return next(new AppError("Invalid file type", 400));
+      for (const file of files) {
+        const type = await fileTypeFromFile(file.path);
+        if (!type || !allowedTypes.includes(type.mime)) {
+          await removeFiles(files);
+          return next(new AppError("Invalid file type", 400));
+        }
       }
       return next();
     } catch (error) {
-      return next(new AppError("Internal server error", 500));
+      await removeFiles(files).catch(() => {});
+      return next(error);
     }
   };

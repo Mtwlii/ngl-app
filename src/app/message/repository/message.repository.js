@@ -10,8 +10,11 @@ export async function saveMessage({ content, receiver, sender }) {
 
 export async function getAllMessagesByUserId(userId) {
   return await Message.find(
-    { receiver: userId },
+    { receiver: userId, isDeleted: false },
     {},
-    { populate: { path: "sender", select: "id name email" } },
+    {
+      sort: { createdAt: -1 },
+      populate: { path: "sender", select: "id name email" },
+    },
   );
 }

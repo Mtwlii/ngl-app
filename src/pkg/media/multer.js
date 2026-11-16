@@ -1,19 +1,17 @@
-import crypto from "crypto";
+import crypto from "node:crypto";
+import path from "node:path";
 import multer, { diskStorage } from "multer";
 import { AppError } from "../../lib/error/error.js";
 
-// storage configuration
-// 1- disk storage --> saves files directly to disk hdd
-//  where to save the files on disk
-//  what is file name
-// 2- memory storage --> ram for temporary storage
+export const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB, enforced while streaming (not after the upload finished)
 
 function multerUpload(
-  allawedType = ["image/jpeg", "image/png", "application/pdf"],
+  allowedTypes = ["image/jpeg", "image/png", "application/pdf"],
 ) {
   return multer({
-    fileFilter: function (_req, file, cb) {
-      if (allawedType.includes(file.mimetype)) {
+    limits: { fileSize: MAX_FILE_SIZE },
+    fileFilter(_req, file, cb) {
+      if (allowedTypes.includes(file.mimetype)) {
         cb(null, true);
       } else {
         cb(new AppError("Invalid file type", 400), false);
@@ -21,29 +19,21 @@ function multerUpload(
     },
     storage: diskStorage({
       destination: "uploads",
-      filename: function (_req, file, cb) {
-        console.log(file); //{ fieldname, originalname, encoding, mimetype, buffer, size }
-        //pdf files will have .pdf extension
-        // cb(null, Date.now() + '-' + file.originalname.split('.').pop());
-        cb(null, crypto.randomUUID() + "-" + file.originalname);
+      // random name + the original extension only: the client-supplied filename never touches the disk
+      filename(_req, file, cb) {
+        const ext = path.extname(file.originalname).toLowerCase().slice(0, 10);
+        cb(null, `${crypto.randomUUID()}${ext}`);
       },
     }),
   });
 }
 
-export function uploadSingleFile(
-  fileName,
-  allawedType = ["image/jpeg", "image/png", "application/pdf"],
-) {
-  return multerUpload(allawedType).single(fileName);
+export function uploadSingleFile(fileName, allowedTypes) {
+  return multerUpload(allowedTypes).single(fileName);
 }
-export function uploadFilesArray(
-  fileName,
-  maxCount,
-  allawedType = ["application/pdf", "application/msword"],
-) {
-  return multerUpload(allawedType).array(fileName, maxCount);
+export function uploadFilesArray(fileName, maxCount, allowedTypes) {
+  return multerUpload(allowedTypes).array(fileName, maxCount);
 }
-export function uploadFieldsFile(fields) {
-  return multerUpload().fields(fields);
+export function uploadFieldsFile(fields, allowedTypes) {
+  return multerUpload(allowedTypes).fields(fields);
 }

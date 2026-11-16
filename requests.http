@@ -5,7 +5,7 @@ Content-Type: application/json
 
 {
   "name": "Metwally Moahmed",
-  "email": "metooqasim@gmail.com",
+  "email": "user@example.com",
   "password": "123456"
 }
 
@@ -14,7 +14,7 @@ Content-Type: application/json
 # Content-Type: application/json
 
 # {
-#   "email": "metooqasim@gmail.com",
+#   "email": "user@example.com",
 #   "otpCode": "858593"
 # }
 

@@ -1,121 +1,77 @@
-import { toMs } from "../../../pkg/utils/time.js";
 import { validateBody } from "../../../lib/validation/vakidation.js";
+import { accessTokenCookieOptions } from "../../../lib/auth/cookie.js";
 import {
   RegisterDto,
   LoginDto,
   ResetPasswordDto,
   SendOtpDto,
   VerifyAccountDto,
+  GoogleLoginDto,
 } from "../dto/auth.dto.js";
 import * as authService from "../service/auth.service.js";
 
-export async function register(req, res, next) {
-  try {
-    //add layer for validation
-    const data = validateBody(RegisterDto, req.body);
-    const createdUser = await authService.register(data);
-    res.status(201).json({
-      success: true,
-      message:
-        "User registered successfully. Please check your email for the activation OTP.",
-      data: createdUser,
-    });
-  } catch (error) {
-    next(error);
-  }
+// Express 5 forwards rejected promises to the error handler automatically,
+// so the try/catch + next(error) boilerplate is no longer needed here.
+
+export async function register(req, res) {
+  const data = validateBody(RegisterDto, req.body);
+  const createdUser = await authService.register(data);
+  res.status(201).json({
+    success: true,
+    message:
+      "User registered successfully. Please check your email for the activation OTP.",
+    data: createdUser,
+  });
 }
 
-export async function verifyAccount(req, res, next) {
-  try {
-    //add layer for validation
-    const data = validateBody(VerifyAccountDto, req.body);
-    const { email, otpCode } = data;
-    const updatedUser = await authService.verifyOTP(email, otpCode);
-
-    res.status(200).json({
-      success: true,
-      message: "User verified successfully.",
-      data: updatedUser,
-    });
-  } catch (error) {
-    next(error);
-  }
+export async function verifyAccount(req, res) {
+  const { email, otpCode } = validateBody(VerifyAccountDto, req.body);
+  const updatedUser = await authService.verifyOTP(email, otpCode);
+  res.status(200).json({
+    success: true,
+    message: "User verified successfully.",
+    data: updatedUser,
+  });
 }
 
-export async function login(req, res, next) {
-  try {
-    //add layer for validation
-    const data = validateBody(LoginDto, req.body);
-    const { email, password } = data;
-    const token = await authService.login(email, password);
-    res.cookie("access_token", token, {
-      httpOnly: true, // secure: true,  // 100% secure
-      maxAge: toMs(1, "hours"), // session expires after 1 hour
-    });
-    res.status(200).json({
-      success: true,
-      message: "Login successful",
-    });
-  } catch (error) {
-    next(error);
-  }
+export async function login(req, res) {
+  const { email, password } = validateBody(LoginDto, req.body);
+  const token = await authService.login(email, password);
+  res.cookie("access_token", token, accessTokenCookieOptions);
+  res.status(200).json({
+    success: true,
+    message: "Login successful",
+  });
 }
 
-export async function sendOtp(req, res, next) {
-  try {
-    //add layer for validation
-    const data = validateBody(SendOtpDto, req.body);
-    const { email } = data;
-    await authService.sendOtp(email);
-    res.status(200).json({
-      success: true,
-      message: "OTP sent successfully, Check Your email",
-    });
-  } catch (err) {
-    next(err);
-  }
+export async function sendOtp(req, res) {
+  const { email } = validateBody(SendOtpDto, req.body);
+  await authService.sendOtp(email);
+  res.status(200).json({
+    success: true,
+    message: "OTP sent successfully, Check Your email",
+  });
 }
 
-// Reset Password
-export async function resetPassword(req, res, next) {
-  try {
-    //add layer for validation
-    const data = validateBody(ResetPasswordDto, req.body);
-    const { email, otpCode, newPassword } = data;
-
-    if (!email || !otpCode || !newPassword) {
-      return res.status(400).json({
-        success: false,
-        message: "email, otpCode and newPassword are required",
-      });
-    }
-
-    await authService.resetPassword(email, otpCode, newPassword);
-
-    res.status(200).json({
-      success: true,
-      message: "Your Password Has been Updated",
-    });
-  } catch (err) {
-    next(err);
-  }
+export async function resetPassword(req, res) {
+  const { email, otpCode, newPassword } = validateBody(
+    ResetPasswordDto,
+    req.body,
+  );
+  await authService.resetPassword(email, otpCode, newPassword);
+  res.status(200).json({
+    success: true,
+    message: "Your Password Has been Updated",
+  });
 }
 
-//Login With google
-
-export async function loginWithGoogle(req, res, next) {
-  try {
-    const token = await authService.loginWithGoogle(req.body.idToken);
-    (res.cookie("access_token", token),
-      {
-        httpOnly: true,
-        maxAge: toMs(1, "hours"),
-      });
-    res.json({
-      message: "user login successfulley",
-      success: true,
-    });
-  } catch (err) {
-    next(err);
-  }
+export async function loginWithGoogle(req, res) {
+  const { idToken } = validateBody(GoogleLoginDto, req.body);
+  const token = await authService.loginWithGoogle(idToken);
+  // options must be the 3rd argument of res.cookie (they were silently dropped before)
+  res.cookie("access_token", token, accessTokenCookieOptions);
+  res.status(200).json({
+    success: true,
+    message: "User login successful",
+  });
 }

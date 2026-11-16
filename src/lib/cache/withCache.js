@@ -1,24 +1,34 @@
 import { cacheProvider } from "./init.js";
+import { logger } from "../../pkg/logger/logger.js";
 
+// Usage: router.get("/x", authGuard, withCache(60), handler)   <-- call it!
+// The key includes the user id, so per-user responses can't leak between users.
 export function withCache(ttl = 3600) {
   return async (req, res, next) => {
-    // request is coming before or not
-    let key = `${req.method}:${req.originalUrl}.`;
-    const cached = await cacheProvider.get(key);
-    if (cached && cached.length > 0) {
-      res.setHeader("X-Cache", "HIT");
-      // "GET:/products": "[{},{},..]"
-      return res.status(200).json(JSON.parse(cached));
+    const key = `cache:${req.user?.id ?? "public"}:${req.method}:${req.originalUrl}`;
+
+    try {
+      const cached = await cacheProvider.get(key);
+      if (cached) {
+        res.setHeader("X-Cache", "HIT");
+        return res.status(200).json(JSON.parse(cached));
+      }
+    } catch (err) {
+      // fail open: serve from the DB if Redis is down
+      logger.warn("cache read failed", { error: err.message });
+      return next();
     }
-    // interceptor  >> cash and send res
+
     const originalJson = res.json.bind(res);
     res.json = async (body) => {
-     if (res.statusCode >= 200 && res.statusCode < 300) {
-       //1. cache body --> {message: "success", data: [{}, {}, ...]}
-      await cacheProvider.set(key, JSON.stringify(body), ttl);
-      //2. send req
-      res.setHeader("X-Cache", "MISS");
-     }
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        try {
+          await cacheProvider.set(key, JSON.stringify(body), ttl);
+          res.setHeader("X-Cache", "MISS");
+        } catch (err) {
+          logger.warn("cache write failed", { error: err.message });
+        }
+      }
       return originalJson(body);
     };
 

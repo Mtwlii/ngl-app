@@ -11,6 +11,8 @@ export function createApp() {
     const app = express();
 
     app.use(cors());
+    // get static path
+    app.use('/uploads', express.static("uploads"));
     app.use(express.json());
     // Parsing JSON request bodies
     app.use(cookieParser());
